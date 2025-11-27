@@ -3,7 +3,7 @@ const { eventModel } = require("../models/event/event.model");
 const { adminEventsDiscriminator } = require("../models/user/administrator/administrator.model");
 const { DB_ERROR_CODES, DataBaseError } = require("../utils/errors/DataBase.error");
 const { supervisorModel } = require("../models/user/supervisor/supervisor.model");
-const { default: mongoose } = require("mongoose");
+const mongoose = require("mongoose");
 const { recreationalWorkshopModel } = require("../models/recreational.workshops/recreational.workshops.model");
 const { formattDate } = require("../validators/dates");
 const bcrypt = require("bcrypt");
@@ -14,74 +14,67 @@ const registerUserToEvent = async (user, eventId) => {
     gender, birthday,
     email, eventAwarness,
     livingState, profession,
-    workPlace
+    workPlace, password
   } = user;
 
-  const session = await mongoose.startSession();
+  try {
+    // Buscar si el evento esta registrado
+    const eventFound = await eventModel.findOne({ _id: eventId });
+    if (!eventFound) throw new DataBaseError("El evento no existe", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
 
-  session.startTransaction();
+    // Buscar si el participante ya existe
+    let userFound = await participantModel.findOne({ email });
 
-  // Buscar si el evento esta registrado
-  const eventFound = await eventModel.findOne({ _id: eventId }).session(session);
+    if (!userFound) {
+      // Si no existe, crearlo
+      // Generar contraseña si no viene (caso Google)
+      const passwordToSave = password || Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-8);
+      const hashedPassword = await bcrypt.hash(passwordToSave, 10);
 
-  if (!eventFound) throw new DataBaseError("No se ha encontrado el evento en el que quieres participar", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
+      const newParticipant = new participantModel({
+        name,
+        lastname,
+        email,
+        password: hashedPassword,
+        role: "Participant",
+        gender: gender || "Sin especificar",
+        birthday: birthday || null,
+        eventAwarness: eventAwarness || "Google",
+        livingState: livingState || "Sin especificar",
+        profession: profession || "N/A",
+        workPlace: workPlace || "N/A",
+        events: [eventFound._id], // Inscribir directamente al evento
+        workshops: [],
+        QRs: []
+      });
 
-  // Buscar el participante asociado con el email
-  let userFound = await participantModel.findOne({ email }).session(session);
+      userFound = await newParticipant.save();
+    } else {
+      // Si ya existe, verificar si ya está inscrito
+      const isAlreadyRegistered = userFound.events.some(e => e.equals(eventFound._id));
+      if (isAlreadyRegistered) {
+        throw new DataBaseError("El usuario ya está registrado en este evento", DB_ERROR_CODES.DUPLICATED_CONTENT);
+      }
 
-  // Si el participante no existe en la base de datos, se crea uno
-  if (!userFound) {
+      // Inscribir al evento
+      await userFound.updateOne({ $addToSet: { events: eventFound._id } });
+    }
 
-    // Hashear la contraseña
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(email, saltRounds);
-
-    const participantSaved = new participantModel({
-      name,
-      lastname,
-      email,
-      password: hashedPassword,
-      role: "Participant",
-      gender,
-      birthday,
-      eventAwarness,
-      livingState,
-      profession,
-      workPlace
+    // Agregar el participante a la lista de participantes del evento
+    await eventFound.updateOne({
+      $addToSet: {
+        participants: {
+          userId: userFound._id,
+          assist: false
+        }
+      }
     });
 
-    // Registrar el participante en la base de datos
-    try {
-      userFound = await participantSaved.save({ session });
-      // await session.commitTransaction();
-    } catch (err) {
-      await session.abortTransaction();
-      await session.endSession();
-      console.log(err);
-      let errorCode = DB_ERROR_CODES.UNKNOWN_ERROR;
-      let errorMsg = "Ha ocurrido un error al registrar la participación";
+    return { success: true, data: { participant: userFound, event: eventFound } };
 
-      if (err.code === DB_ERROR_CODES.DUPLICATED_CONTENT) {
-        const keyValue = Object.entries(err.keyValue);
-        errorCode = DB_ERROR_CODES.DUPLICATED_CONTENT;
-        errorMsg = `Ya hay un registro de ${keyValue[0][0]} con el valor ${keyValue[0][1]}`;
-      }
-      throw new DataBaseError(errorMsg, errorCode);
-    }
+  } catch (error) {
+    throw error;
   }
-
-  // Actualizacion de los participantes del evento
-  const eventResult = await eventFound.updateOne({ $addToSet: { participants: { userId: userFound._id, assist: false } } }, { session });
-  if (eventResult.modifiedCount === 0) throw new DataBaseError("Ya hay un registro con este valor en el campo participantes del evento", DB_ERROR_CODES.DUPLICATED_CONTENT);
-
-  // Actualizacion de los eventos del participante
-  const participantResult = await userFound.updateOne({ $addToSet: { events: eventFound._id } }, { session });
-  if (participantResult.modifiedCount === 0) throw new DataBaseError("Ya hay un registro con este valor en el campo eventos del participante", DB_ERROR_CODES.DUPLICATED_CONTENT);
-
-  // Retornar true en caso de que el participante se haya registrado
-  await session.commitTransaction();
-  await session.endSession();
-  return { success: true, data: { participant: userFound, event: eventFound } };
 }
 
 const createEvent = async (event, adminId) => {
@@ -233,7 +226,7 @@ const addWorkshopToEvent = async (workshopId, eventId, schedule) => {
     if (!workshopFound) throw new DataBaseError("Este taller no existe", DB_ERROR_CODES.DUPLICATED_CONTENT);
 
     // Si el taller ya pertenece a un evento, lanzar un error
-    if(workshopFound.event) throw new DataBaseError(`Este taller ya pertenece a un evento ${workshopFound.event}`, DB_ERROR_CODES.DUPLICATED_CONTENT);
+    if (workshopFound.event) throw new DataBaseError(`Este taller ya pertenece a un evento ${workshopFound.event}`, DB_ERROR_CODES.DUPLICATED_CONTENT);
 
     // Busqueda del evento
     const eventFound = await eventModel.findById(eventId).session(session);
@@ -244,17 +237,17 @@ const addWorkshopToEvent = async (workshopId, eventId, schedule) => {
     if (eventResult.modifiedCount === 0) throw new DataBaseError("Este taller ya fue agregado en el evento", DB_ERROR_CODES.DUPLICATED_CONTENT);
 
     //Agregar el evento a la propiedad de evento del taller
-    const  { startDate, endDate } = schedule;
+    const { startDate, endDate } = schedule;
 
     // Validar si los horarios del taller estan dentro de los horarios del evento
-    if(startDate && new Date(formattDate(startDate)) < new Date(formattDate(eventFound.startDate))) {
+    if (startDate && new Date(formattDate(startDate)) < new Date(formattDate(eventFound.startDate))) {
       throw new DataBaseError(
         `La fecha de inicio que quieres poner al taller (${startDate}) es anterior a la fecha de inicio del evento (${eventFound.startDate})`,
         DB_ERROR_CODES.BAD_REQUEST
       );
     }
     // Validar si la fecha de fin del taller es posterior a la fecha de fin del evento retornar un error
-    if(endDate && new Date(formattDate(endDate)) > new Date(formattDate(eventFound.endDate))) {
+    if (endDate && new Date(formattDate(endDate)) > new Date(formattDate(eventFound.endDate))) {
       throw new DataBaseError(
         `La fecha de fin que quieres poner al taller (${endDate}) es posterior a la fecha de fin del evento (${eventFound.endDate})`,
         DB_ERROR_CODES.BAD_REQUEST
@@ -283,11 +276,11 @@ const getEventsByName = async (name) => {
 
 const assistanceRegistration = async (eventId, participantId) => {
   const event = await eventModel.findOne({ _id: eventId });
-  if(!event) throw new DataBaseError("El evento no fue encontrado", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
+  if (!event) throw new DataBaseError("El evento no fue encontrado", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
 
   const participantToUpdate = event.participants.find(participant => participant.userId.equals(participantId));
 
-  if(participantToUpdate) {
+  if (participantToUpdate) {
     participantToUpdate.assist = true;
     event.markModified('participants');
     await event.save();
@@ -301,19 +294,19 @@ const assistanceRegistration = async (eventId, participantId) => {
 const registerAssistanceByQRFolio = async (folio) => {
   // Buscar el participante que tiene el QR con el folio especificado
   const participant = await participantModel.findOne({ "QRs.folio": folio });
-  if(!participant) throw new DataBaseError("No se encontró el código QR con el folio especificado", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
-  
+  if (!participant) throw new DataBaseError("No se encontró el código QR con el folio especificado", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
+
   // Obtener el QR específico y su eventId
   const qr = participant.QRs.find(qr => qr.folio === folio);
-  if(!qr) throw new DataBaseError("No se encontró el código QR con el folio especificado", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
+  if (!qr) throw new DataBaseError("No se encontró el código QR con el folio especificado", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
 
   // Buscar el evento
   const event = await eventModel.findById(qr.eventId);
-  if(!event) throw new DataBaseError("No se encontró el evento asociado al QR", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
+  if (!event) throw new DataBaseError("No se encontró el evento asociado al QR", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
 
   // Buscar el participante en el arreglo de participantes del evento
   const participantToUpdate = event.participants.find(p => p.userId.equals(participant._id));
-  if(!participantToUpdate) throw new DataBaseError("El participante no está registrado en este evento", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
+  if (!participantToUpdate) throw new DataBaseError("El participante no está registrado en este evento", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
 
   // Marcar como asistió
   participantToUpdate.assist = true;
@@ -336,15 +329,15 @@ const cancelEventRegistration = async (participantId, eventId) => {
   try {
     // Buscar el participante
     const participant = await participantModel.findById(participantId).session(session);
-    if(!participant) throw new DataBaseError("No se encontró el participante", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
+    if (!participant) throw new DataBaseError("No se encontró el participante", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
 
     // Buscar el evento
     const event = await eventModel.findById(eventId).session(session);
-    if(!event) throw new DataBaseError("No se encontró el evento", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
+    if (!event) throw new DataBaseError("No se encontró el evento", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
 
     // Remover el QR asociado al evento
     const qrIndex = participant.QRs.findIndex(qr => qr.eventId.equals(eventId));
-    if(qrIndex === -1) throw new DataBaseError("No se encontró el QR asociado a este evento", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
+    if (qrIndex === -1) throw new DataBaseError("No se encontró el QR asociado a este evento", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
 
     // Obtener los IDs y folios de los talleres del QR antes de eliminarlo
     const workshopIds = participant.QRs[qrIndex].workshops.map(w => w.workshopId);
@@ -353,37 +346,37 @@ const cancelEventRegistration = async (participantId, eventId) => {
 
     // Remover el evento de los eventos del participante
     const eventIndex = participant.events.findIndex(e => e.equals(eventId));
-    if(eventIndex === -1) throw new DataBaseError("El participante no está inscrito en este evento", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
+    if (eventIndex === -1) throw new DataBaseError("El participante no está inscrito en este evento", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
     participant.events.splice(eventIndex, 1);
 
     // Remover el participante de la lista de participantes del evento
     const participantIndex = event.participants.findIndex(p => p.userId.equals(participantId));
-    if(participantIndex === -1) throw new DataBaseError("El participante no está inscrito en este evento", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
+    if (participantIndex === -1) throw new DataBaseError("El participante no está inscrito en este evento", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
     event.participants.splice(participantIndex, 1);
 
     // Cancelar inscripción a los talleres del evento
-    for(let i = 0; i < workshopIds.length; i++) {
+    for (let i = 0; i < workshopIds.length; i++) {
       const workshopId = workshopIds[i];
       const workshopFolio = workshopFolios[i];
       const workshop = await recreationalWorkshopModel.findById(workshopId).session(session);
-      if(workshop) {
+      if (workshop) {
         // Remover el participante de la lista de participantes del taller
         const workshopParticipantIndex = workshop.participants.findIndex(p => p.userId.equals(participantId));
-        if(workshopParticipantIndex !== -1) {
+        if (workshopParticipantIndex !== -1) {
           workshop.participants.splice(workshopParticipantIndex, 1);
         }
 
         // Remover el taller de la lista de talleres del participante
         const workshopIndex = participant.workshops.findIndex(w => w.equals(workshopId));
-        if(workshopIndex !== -1) {
+        if (workshopIndex !== -1) {
           participant.workshops.splice(workshopIndex, 1);
         }
 
         // Remover el folio del taller de los QRs del participante
         participant.QRs.forEach(qr => {
-          if(qr.workshops) {
+          if (qr.workshops) {
             const workshopQRIndex = qr.workshops.findIndex(w => w.folio === workshopFolio);
-            if(workshopQRIndex !== -1) {
+            if (workshopQRIndex !== -1) {
               qr.workshops.splice(workshopQRIndex, 1);
             }
           }

@@ -48,14 +48,25 @@ eventRoutes.post(
   "/inscription/:eventId",
   // Middlewares de validaiones
   userValidationsRequired,
-  requiredString("eventAwarness", "Este campo es requerido y debe ser un texto"),
-  requiredString("livingState", "Este campo es requerido y debe ser un texto"),
-  isIn("gender", ["Hombre", "Mujer"], "El genero debe ser: Hombre o Mujer"),
+  notRequiredString("eventAwarness", "Este campo debe ser un texto"),
+  notRequiredString("livingState", "Este campo debe ser un texto"),
+  notRequiredString("gender", "El genero debe ser texto"),
   isDate({
     field: "birthday",
-    message: "La fecha es requerida y debe de tener el formato: dd-MM-YYYY"
+    message: "La fecha debe de tener el formato: dd-MM-YYYY",
+    isOptional: true
   }),
   notRequiredString(["profession", "workplace"], "Estos datos deben ser texto"),
+  // Controlador
+  registerToEvent
+);
+
+// Ruta LIGERA solo para Google
+eventRoutes.post(
+  "/inscription/google/:eventId",
+  // Quitamos userValidationsRequired porque Google ya validó al usuario
+  // Dejamos solo los validadores opcionales por si acaso
+  notRequiredString("profession", "Este dato es opcional"),
   // Controlador
   registerToEvent
 );
@@ -105,22 +116,22 @@ eventRoutes.post(
 );
 
 // ! Funcion para obtener todos los eventos, a esta funcion solo acceden los superAdmins; FALTA VALIDAR EL ROL DEL USUARIO (SOLO SUPER USUARIO Y PARTICIPANTE)
-eventRoutes.get("/all-events",getAllEvents);
+eventRoutes.get("/all-events", getAllEvents);
 
 // ! Realizar funcion para obtener los eventos por administrador; FALTA VALIDAR EL ROL DEL USUARIO (SOLO ADMINISTRADOR DE EVENTO)
 eventRoutes.get("/admin", authenticateToken, checkRole(USER_ROLES.EVENT_ADMIN), getAllEventsByAdmin);
 
 // ! Funcion para eliminar un evento mediante el ID, los administradores deben poder eliminar solo eventos registrados a su nombre; FALTA VALIDAR EL ROL DEL USUARIO (SOLO ADMINISTRADOR DE EVENTO)
-eventRoutes.delete("/delete/:eventId",authenticateToken, checkRole(USER_ROLES.EVENT_ADMIN), deleteById);
+eventRoutes.delete("/delete/:eventId", authenticateToken, checkRole(USER_ROLES.EVENT_ADMIN), deleteById);
 
 // ! Funcion para buscar un evento por titulo; FALTA VALIDAR EL ROL DEL USUARIO (SOLO PARTICIPANTE)
-eventRoutes.get("/get-by-name",authenticateToken, checkRole(USER_ROLES.PARTICIPANT), getByName);
+eventRoutes.get("/get-by-name", authenticateToken, checkRole(USER_ROLES.PARTICIPANT), getByName);
 
 // Ruta para encontrar una imagen
 eventRoutes.get("/image", getImg);
 
 // ! Funcion para obtener un evento mediante el ID; FALTA VALIDAR EL ROL DEL USUARIO (SOLO SUPER ADMINISTRADOR Y PARTICIPANTE)
-eventRoutes.get("/:eventId",getById);
+eventRoutes.get("/:eventId", getById);
 
 // ! Funcion para actualizar un evento mediante el ID, solo los administradores de dicho evento realizan esta accion; FALTA VALIDAR EL ROL DEL USUARIO (SOLO ADMINISTRADOR DE EVENTO)
 eventRoutes.put(
@@ -207,9 +218,9 @@ eventRoutes.delete("/cancel-registration/:eventId", authenticateToken, checkRole
 // Get all participants by event ID (ONLY EVENT ADMIN AND SUPERVISOR)
 // Obtener todos los participantes por ID de evento (SOLO ADMIN DE EVENTO Y SUPERVISOR)
 eventRoutes.get(
-  "/participants/:eventId", 
-  authenticateToken, 
-  checkRole(USER_ROLES.EVENT_ADMIN, USER_ROLES.SUPERVISOR), 
+  "/participants/:eventId",
+  authenticateToken,
+  checkRole(USER_ROLES.EVENT_ADMIN, USER_ROLES.SUPERVISOR),
   getParticipantsByEventController
 );
 

@@ -5,20 +5,20 @@ const participantSchema = new mongoose.Schema(
   {
     gender: {
       type: String,
-      required: true,
-      enum: ["Hombre", "Mujer"]
+      required: false,
+      enum: ["Hombre", "Mujer", "Sin especificar"]
     },
     birthday: {
       type: String,
-      required: true
+      required: false
     },
     eventAwarness: { // Medio por el cual se entero del evento
       type: String,
-      required: true
+      required: false
     },
     livingState: { // Estado de residencia
       type: String,
-      required: true
+      required: false
     },
     profession: {
       type: String,
