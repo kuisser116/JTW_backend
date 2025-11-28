@@ -4,12 +4,10 @@ const bcrypt = require("bcrypt");
 const mongoose = require("mongoose");
 const { adminEventsDiscriminator } = require("../models/user/administrator/administrator.model");
 
-// Crear un nuevo supervisor
+// Crear un nuevo supervisor (CORREGIDO: Sin Transacciones)
 const createSupervisor = async (supervisorData, administratorId) => {
-  const session = await mongoose.startSession();
+  // Eliminamos session y transaction
   try {
-    session.startTransaction();
-
     // Buscar al administrador
     const administrator = await adminEventsDiscriminator.findById(administratorId);
     if (!administrator) {
@@ -27,17 +25,18 @@ const createSupervisor = async (supervisorData, administratorId) => {
       administrator: administratorId
     });
 
-    await supervisor.save({ session });
+    // Guardar el supervisor (Sin sesión)
+    await supervisor.save();
 
     // Agregar el supervisor al array de supervisores del administrador
     administrator.supervisors.push(supervisor._id);
     administrator.markModified("supervisors");
-    await administrator.save({ session });
+    
+    // Guardar el administrador (Sin sesión)
+    await administrator.save();
 
-    await session.commitTransaction();
     return supervisor;
   } catch (err) {
-    await session.abortTransaction();
     console.log(err);
     let errorCode = DB_ERROR_CODES.UNKNOWN_ERROR;
     let errorMsg = "Ha ocurrido un error al crear el supervisor";
@@ -48,8 +47,6 @@ const createSupervisor = async (supervisorData, administratorId) => {
       errorMsg = `Ya hay un registro de ${keyValue[0][0]} con el valor ${keyValue[0][1]}`;
     }
     throw new DataBaseError(errorMsg, errorCode);
-  } finally {
-    await session.endSession();
   }
 };
 
@@ -81,8 +78,6 @@ const getSupervisorById = async (id) => {
     );
   return supervisor;
 };
-
-/// ... existing code ...
 
 // Actualizar supervisor
 const updateSupervisor = async (id, supervisorData) => {
@@ -145,8 +140,6 @@ const updateSupervisor = async (id, supervisorData) => {
   
   return updatedSupervisor;
 };
-
-// ... existing code ...
 
 // Eliminar supervisor
 const deleteSupervisor = async (id) => {
