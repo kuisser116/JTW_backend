@@ -91,6 +91,7 @@ eventRoutes.post(
   requiredString("mainImg", "La imagen principal es requerida"),
   requiredString("name", "El nombre es requerido"),
   requiredString("description", "La descripcion es requerida"),
+  notRequiredString("location", "La ubicación es opcional"),
   minLength({
     fields: "bannerImgs",
     min: 3,
@@ -150,6 +151,7 @@ eventRoutes.put(
   notRequiredString("mainImg", "La imagen principal es requerida"),
   notRequiredString("name", "El nombre es requerido"),
   notRequiredString("description", "La descripcion es requerida"),
+  notRequiredString("location", "La ubicación es opcional"),
   minLength({
     fields: "bannerImgs",
     min: 3,

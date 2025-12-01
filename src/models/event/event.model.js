@@ -10,7 +10,7 @@ const eventSchema = new mongoose.Schema(
     bannerImgs: {
       type: [String],
       validate: {
-        validator: function(value) {
+        validator: function (value) {
           return value.length >= 3;
         }
       }
@@ -60,6 +60,11 @@ const eventSchema = new mongoose.Schema(
     endDate: {
       type: String,
       required: true
+    },
+    location: {
+      type: String,
+      required: false,
+      default: "Sin especificar"
     }
   }
 );

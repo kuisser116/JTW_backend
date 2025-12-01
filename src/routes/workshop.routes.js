@@ -13,7 +13,8 @@ const {
   registrateAssistance,
   cancelWorkshopRegistrationController,
   getWorkshopsBySupervisorAndEventController,
-  removeSupervisorFromWorkshop
+  removeSupervisorFromWorkshop,
+  getImg
 } = require("../controllers/recreational.workshop.controller");
 const { requiredString, notRequiredString } = require("../validators/strings");
 const { isNumber } = require("../validators/numbers");
@@ -62,7 +63,7 @@ recreationalWorkshopRoutes.post(
   // Middleware de validaciones
   requiredString("name", "El nombre del taller debe ser un texto y es obligatorio"),
   requiredString("description", "La descripcion del evento debe ser un texto y es obligatoria"),
-  requiredString("img", "La imagen del taller debe ser un texto y es obligatoria"),
+  notRequiredString("img", "La imagen del taller es opcional"),
   requiredString("instructor", "El ponente del taller debe ser un texto y es obligatorio"),
   isNumber("limitQuota", "El limite de participantes debe ser un numero y es obligatorio"),
   isDate({
@@ -128,11 +129,14 @@ recreationalWorkshopRoutes.get("/admin", authenticateToken, checkRole(USER_ROLES
 // ! Ruta para obtener los talleres por evento (TODOS LOS USUARIOS)
 recreationalWorkshopRoutes.get("/event/:eventId", getAllWorkshopsByEvent);
 
+// Ruta para encontrar una imagen
+recreationalWorkshopRoutes.get("/image", getImg);
+
 // ! Ruta para obtener los talleres por supervisor (SOLO SUPERVISOR)
 recreationalWorkshopRoutes.get("/supervisor", authenticateToken, checkRole(USER_ROLES.SUPERVISOR), getAllWorkshopsBySupervisor);
 
 // ! Ruta para obtener los talleres por participante (SOLO PARTICIPANTE)
-recreationalWorkshopRoutes.get("/participant",  authenticateToken, checkRole(USER_ROLES.PARTICIPANT), getAllWorkshopsByParticipant);
+recreationalWorkshopRoutes.get("/participant", authenticateToken, checkRole(USER_ROLES.PARTICIPANT), getAllWorkshopsByParticipant);
 
 // ! Ruta para inscribir a un participante (SOLO PARTICIPANTE, SUPERVISOR)
 recreationalWorkshopRoutes.put(
@@ -171,9 +175,9 @@ recreationalWorkshopRoutes.get(
 
 // ! Ruta para eliminar un supervisor de un taller (SOLO ADMINISTRADOR DE EVENTO)
 recreationalWorkshopRoutes.delete(
-  "/remove-supervisor/:workshopId/:supervisorId", 
-  authenticateToken, 
-  checkRole(USER_ROLES.EVENT_ADMIN), 
+  "/remove-supervisor/:workshopId/:supervisorId",
+  authenticateToken,
+  checkRole(USER_ROLES.EVENT_ADMIN),
   removeSupervisorFromWorkshop
 );
 

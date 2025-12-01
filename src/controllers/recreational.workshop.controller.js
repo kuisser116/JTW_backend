@@ -17,11 +17,25 @@ const {
 const { clientDataValidation } = require("../utils/client.data.validation");
 const { DB_ERROR_CODES } = require("../utils/errors/DataBase.error");
 const { USER_ROLES } = require("../utils/constants/user.roles");
+const path = require("path");
+const { existsSync } = require("fs");
+
+const absPathForImages = path.join(__dirname, "../../uploads/images");
+const getImg = async (req, res) => {
+  const { filename } = req.query;
+  const filePath = path.join(absPathForImages, filename);
+
+  if (existsSync(filePath)) {
+    return res.status(200).sendFile(filePath);
+  } else {
+    return res.status(400).json({ data: "Imagen no encontrada", status: DB_ERROR_CODES.RESOURCE_NOT_FOUND });
+  }
+}
 
 const create = async (req, res) => {
 
   const result = clientDataValidation(req);
-  if(result.status === 400) return res.status(result.status).json(result);
+  if (result.status === 400) return res.status(result.status).json(result);
 
   const { userId } = req.user;
   try {
@@ -44,7 +58,7 @@ const getAllWorkshops = async (req, res) => {
 const updateById = async (req, res) => {
 
   const result = clientDataValidation(req);
-  if(result.status === 400) return res.status(result.status).json(result);
+  if (result.status === 400) return res.status(result.status).json(result);
 
   try {
     const { workshopId } = req.params;
@@ -127,7 +141,7 @@ const addParticipantToWorkshop = async (req, res) => {
   const { role } = req.user;
   let { userId } = req.user;
 
-  if(role === USER_ROLES.SUPERVISOR) {
+  if (role === USER_ROLES.SUPERVISOR) {
     userId = req.body.userId;
   }
 
@@ -145,8 +159,8 @@ const registrateAssistance = async (req, res) => {
 
   try {
     const isRegistered = await assistanceRegistration(folio);
-    if(isRegistered) return res.status(201).json({ data: "Asistencia registrada" });
-  } catch(err) {
+    if (isRegistered) return res.status(201).json({ data: "Asistencia registrada" });
+  } catch (err) {
     console.log(err);
     return res.status(400).json({ data: err.message, status: err.errorCode });
   }
@@ -158,8 +172,8 @@ const cancelWorkshopRegistrationController = async (req, res) => {
     const { workshopId } = req.params;
     const { userId } = req.user;
 
-    if(!workshopId) return res.status(400).send({ data: "El ID del taller es requerido", status: 400 });
-    if(!userId) return res.status(400).send({ data: "El ID del participante es requerido", status: 400 });
+    if (!workshopId) return res.status(400).send({ data: "El ID del taller es requerido", status: 400 });
+    if (!userId) return res.status(400).send({ data: "El ID del participante es requerido", status: 400 });
 
     await cancelWorkshopRegistration(userId, workshopId);
     return res.status(200).json({ data: "Inscripción al taller cancelada correctamente" });
@@ -220,5 +234,6 @@ module.exports = {
   registrateAssistance,
   cancelWorkshopRegistrationController,
   getWorkshopsBySupervisorAndEventController,
-  removeSupervisorFromWorkshop
+  removeSupervisorFromWorkshop,
+  getImg
 };
