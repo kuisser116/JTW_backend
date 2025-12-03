@@ -7,28 +7,24 @@ const { participantModel } = require("../models/user/participant/participant.mod
 const mongoose = require("mongoose");
 const { formattDate } = require("../validators/dates");
 
+// --- CORREGIDO: Sin Transacciones ---
 const createWorkshop = async (workshop, adminId) => {
   // Busqueda del administrador
   const admin = await adminEventsDiscriminator.findById(adminId);
   if(!admin) throw new DataBaseError("No se ha encontrado al administrador", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
-  const session = await mongoose.startSession();
-
+  
   try {
-    session.startTransaction();
-    //Se guarda el taller
-    const workshopCreated = await new recreationalWorkshopModel(workshop).save({ session });
+    // Se guarda el taller (sin session)
+    const workshopCreated = await new recreationalWorkshopModel(workshop).save();
 
     // Se agrega el id del taller al arreglo de `workshops` del administrador
-    await admin.updateOne({ $addToSet: { workshops: workshopCreated._id } }, { session });
+    await admin.updateOne({ $addToSet: { workshops: workshopCreated._id } });
+    
     // Se agrega el id del administrador al arreglo de `administrators` del taller
-    await workshopCreated.updateOne({ $addToSet: { administrators: admin._id } }, { session });
+    await workshopCreated.updateOne({ $addToSet: { administrators: admin._id } });
 
-    // Confirmar la transaccion
-    await session.commitTransaction();
     return workshopCreated;
   } catch (err) {
-    // Realizar un rollback
-    await session.abortTransaction();
     console.log(err);
     let errorCode = DB_ERROR_CODES.UNKNOWN_ERROR;
     let errorMsg = "Ha ocurrido un error al registrar la participación";
@@ -39,8 +35,6 @@ const createWorkshop = async (workshop, adminId) => {
       errorMsg = `Ya hay un registro de ${keyValue[0][0]} con el valor ${keyValue[0][1]}`;
     }
     throw new DataBaseError(errorMsg, errorCode);
-  } finally {
-    await session.endSession();
   }
 }
 
@@ -145,17 +139,14 @@ const getWorkshopsByParticipant = async (participantId) => {
   return workshops
 }
 
+// --- CORREGIDO: Sin Transacciones ---
 const addSupervisor = async (workshopId, supervisorId) => {
-  const session = await mongoose.startSession();
-
   try {
-    session.startTransaction();
-
     // Busqueda del supervisor
-    const supervisor = await supervisorModel.findById(supervisorId).session(session);
+    const supervisor = await supervisorModel.findById(supervisorId);
 
     // Busqueda del taller
-    const workshop = await recreationalWorkshopModel.findById(workshopId).session(session);
+    const workshop = await recreationalWorkshopModel.findById(workshopId);
 
     if (!supervisor) {
       throw new DataBaseError("El supervisor no se ha encontrado", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
@@ -168,7 +159,7 @@ const addSupervisor = async (workshopId, supervisorId) => {
     // Agregar el id del supervisor al arreglo de `supervisors` del taller
     const workshopUpdateResult = await workshop.updateOne(
       { $addToSet: { supervisors: supervisorId } },
-      { new: true, session }
+      { new: true }
     );
 
     if (workshopUpdateResult.modifiedCount === 0) {
@@ -178,25 +169,21 @@ const addSupervisor = async (workshopId, supervisorId) => {
     // Agregar el id del taller al arreglo de `workshops` del supervisor
     const supervisorUpdateResult = await supervisor.updateOne(
       { $addToSet: { workshops: workshopId } },
-      { new: true, session }
+      { new: true }
     );
 
     if (supervisorUpdateResult.modifiedCount === 0) {
       throw new DataBaseError("Ya hay un registro con este valor en el campo talleres", DB_ERROR_CODES.DUPLICATED_CONTENT);
     }
 
-    await session.commitTransaction();
-
     return workshop;
   } catch (err) {
     console.log(err);
-    await session.abortTransaction();
     throw err;
-  } finally {
-    session.endSession();
   }
 };
 
+// --- CORREGIDO: Sin Transacciones ---
 const addParticipant = async (workshopId, participantId) => {
   // Busqueda del taller
   const workshop = await recreationalWorkshopModel.findById(workshopId);
@@ -206,10 +193,7 @@ const addParticipant = async (workshopId, participantId) => {
   const participant = await participantModel.findById(participantId);
   if(!participant) throw new DataBaseError("El participante no se ha encontrado", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
 
-  const session = await mongoose.startSession();
   try {
-    session.startTransaction();
-
     // Verificar que el taller todavia tenga cupos disponibles
     if(workshop.participants.length >= workshop.limitQuota) {
       throw new DataBaseError("Ya no se aceptan mas participantes en este taller", DB_ERROR_CODES.BAD_REQUEST);
@@ -241,11 +225,11 @@ const addParticipant = async (workshopId, participantId) => {
     }
 
     // Agregar el id del participante al arreglo de `participants` del taller
-    const workshopResult = await workshop.updateOne({ $addToSet: { participants: { userId: participant._id, assist: false } } }, { new: true, session });
+    const workshopResult = await workshop.updateOne({ $addToSet: { participants: { userId: participant._id, assist: false } } }, { new: true });
     if(workshopResult.modifiedCount === 0) throw new DataBaseError("Ya hay un registro de este participante en este taller", DB_ERROR_CODES.DUPLICATED_CONTENT);
 
     // Agregar el id del taller al arreglo de `workshops` del participante
-    const participantResult = await participant.updateOne({ $addToSet: { workshops: workshop._id } }, { new: true, session });
+    const participantResult = await participant.updateOne({ $addToSet: { workshops: workshop._id } }, { new: true });
     if(participantResult.modifiedCount === 0) throw new DataBaseError("Ya hay un registro de este participante en este taller", DB_ERROR_CODES.DUPLICATED_CONTENT);
 
     // Agregar el folio del taller al arreglo de talleres de `QRs` del participante
@@ -268,17 +252,13 @@ const addParticipant = async (workshopId, participantId) => {
     // Actualizar el participante
     participant.markModified("QRs");
     participant.markModified("QRS.workshops");
-    await participant.save({ session });
+    await participant.save();
 
-    await session.commitTransaction();
     return workshop;
   } catch (err) {
-    await session.abortTransaction();
     console.log("Error al agregar el participante al taller");
     console.log(err);
     throw err;
-  } finally {
-    await session.endSession();
   }
 }
 
@@ -309,18 +289,15 @@ const assistanceRegistration = async (folio) => {
   throw new DataBaseError("No se ha encontrado este participante en el taller", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
 }
 
-// Cancelar inscripción a un taller
+// --- CORREGIDO: Sin Transacciones ---
 const cancelWorkshopRegistration = async (participantId, workshopId) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
   try {
     // Buscar el participante
-    const participant = await participantModel.findById(participantId).session(session);
+    const participant = await participantModel.findById(participantId);
     if(!participant) throw new DataBaseError("No se encontró el participante", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
 
     // Buscar el taller
-    const workshop = await recreationalWorkshopModel.findById(workshopId).session(session);
+    const workshop = await recreationalWorkshopModel.findById(workshopId);
     if(!workshop) throw new DataBaseError("No se encontró el taller", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
 
     // Buscar el participante en el taller
@@ -356,17 +333,13 @@ const cancelWorkshopRegistration = async (participantId, workshopId) => {
     });
     participant.markModified('QRs');
 
-    // Guardar los cambios
-    await participant.save({ session });
-    await workshop.save({ session });
+    // Guardar los cambios (sin session)
+    await participant.save();
+    await workshop.save();
 
-    await session.commitTransaction();
     return true;
   } catch (err) {
-    await session.abortTransaction();
     throw err;
-  } finally {
-    await session.endSession();
   }
 }
 
@@ -391,17 +364,14 @@ const getWorkshopsBySupervisorAndEvent = async (supervisorId, eventId) => {
   }
 };
 
+// --- CORREGIDO: Sin Transacciones ---
 const removeSupervisor = async (workshopId, supervisorId) => {
-  const session = await mongoose.startSession();
-
   try {
-    session.startTransaction();
-
     // Busqueda del supervisor
-    const supervisor = await supervisorModel.findById(supervisorId).session(session);
+    const supervisor = await supervisorModel.findById(supervisorId);
 
     // Busqueda del taller
-    const workshop = await recreationalWorkshopModel.findById(workshopId).session(session);
+    const workshop = await recreationalWorkshopModel.findById(workshopId);
 
     if (!supervisor) {
       throw new DataBaseError("El supervisor no se ha encontrado", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
@@ -414,7 +384,7 @@ const removeSupervisor = async (workshopId, supervisorId) => {
     // Remover el id del supervisor del arreglo de `supervisors` del taller
     const workshopUpdateResult = await workshop.updateOne(
       { $pull: { supervisors: supervisorId } },
-      { new: true, session }
+      { new: true }
     );
 
     if (workshopUpdateResult.modifiedCount === 0) {
@@ -424,21 +394,17 @@ const removeSupervisor = async (workshopId, supervisorId) => {
     // Remover el id del taller del arreglo de `workshops` del supervisor
     const supervisorUpdateResult = await supervisor.updateOne(
       { $pull: { workshops: workshopId } },
-      { new: true, session }
+      { new: true }
     );
 
     if (supervisorUpdateResult.modifiedCount === 0) {
       throw new DataBaseError("El taller no está asignado a este supervisor", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
     }
 
-    await session.commitTransaction();
     return workshop;
   } catch (err) {
     console.log(err);
-    await session.abortTransaction();
     throw err;
-  } finally {
-    session.endSession();
   }
 };
 

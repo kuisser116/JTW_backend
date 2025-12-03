@@ -1,125 +1,94 @@
-const mongoose = require("mongoose");
-const { userSchema } = require("../models/user/user");
-const jwt = require("jsonwebtoken");
-const bcrypt = require("bcrypt");
-const { adminEventsDiscriminator, administratorModel } = require("../models/user/administrator/administrator.model");
-const { USER_ROLES } = require("../utils/constants/user.roles");
 const { clientDataValidation } = require("../utils/client.data.validation");
-const { participantModel } = require("../models/user/participant/participant.model");
-const { supervisorModel } = require("../models/user/supervisor/supervisor.model");
+const authService = require("../services/auth.service");
+const { DataBaseError, DB_ERROR_CODES } = require("../utils/errors/DataBase.error");
 
-const JWT_SECRET = process.env.JWT_SECRET || "clave_secreta";
-
-// Creamos el modelo directamente a partir de tu userSchema
-const User = mongoose.model("User", userSchema);
-
-/*Registrar usuario*/
 exports.register = async (req, res) => {
+  // 1. Validación de inputs (Express Validator u otros)
+  const validation = clientDataValidation(req);
+  if (validation.status === 400) return res.status(400).json(validation);
+
   try {
+    // 2. Llamar al servicio
+    await authService.registerUser(req.body);
+    
+    return res.status(201).json({ 
+      data: "Usuario creado con éxito", 
+      status: 201 
+    });
 
-    const result = clientDataValidation(req);
-    if(result.status === 400) return res.status(result.status).json(result);
-
-    const { email, role } = req.body;
-
-    // Verificar si el usuario ya existe
-    const existingUser =
-      await administratorModel.findOne({ email }) ||
-      await adminEventsDiscriminator.findOne({ email });
-
-    if(existingUser) {
-      return res.status(400).json({ message: "El usuario ya existe" });
-    }
-
-    // Hashear la contraseña
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(email, saltRounds);
-
-    req.body.password = hashedPassword;
-
-    if (role === USER_ROLES.EVENT_ADMIN) {
-      const eventAdmin = new adminEventsDiscriminator(req.body);
-
-      try {
-        await eventAdmin.save();
-        return res.status(201).json({ data: "Usuario creado con exito", status: 201 });
-      } catch (err) {
-        console.log(err);
-        let errorCode = DB_ERROR_CODES.UNKNOWN_ERROR;
-        let errorMsg = "Ha ocurrido un error al registrar la participación";
-
-        if (err.code === DB_ERROR_CODES.DUPLICATED_CONTENT) {
-          const keyValue = Object.entries(err.keyValue);
-          errorCode = DB_ERROR_CODES.DUPLICATED_CONTENT;
-          errorMsg = `Ya hay un registro de ${keyValue[0][0]} con el valor ${keyValue[0][1]}`;
-        }
-        return res.status().send({ data: errorMsg, status: errorCode });
-      }
-    } else if (role === USER_ROLES.SUPER_ADMIN) {
-      const superAdmin = new administratorModel(req.body);
-
-      try {
-        await superAdmin.save();
-        return res.status(201).json({ data: "Usuario creado con exito", status: 201 });
-      } catch (err) {
-        console.log(err);
-        let errorCode = DB_ERROR_CODES.UNKNOWN_ERROR;
-        let errorMsg = "Ha ocurrido un error al registrar la participación";
-
-        if (err.code === DB_ERROR_CODES.DUPLICATED_CONTENT) {
-          const keyValue = Object.entries(err.keyValue);
-          errorCode = DB_ERROR_CODES.DUPLICATED_CONTENT;
-          errorMsg = `Ya hay un registro de ${keyValue[0][0]} con el valor ${keyValue[0][1]}`;
-        }
-        return res.status().send({ data: errorMsg, status: errorCode });
-      }
-    } else {
-      return res.status(403).json({ data: "Rol no valido", status: 403 });
-    }
   } catch (error) {
-    console.error(error);
+    console.error("Error en registro:", error);
+
+    // Manejo de errores controlados
+    if (error instanceof DataBaseError) {
+      // Si es error de duplicado, enviamos 409 (Conflict) o 400
+      const statusCode = error.errorCode === DB_ERROR_CODES.DUPLICATED_CONTENT ? 409 : 400;
+      return res.status(statusCode).json({ 
+        message: error.message, 
+        status: statusCode 
+      });
+    }
+
+    if (error.message === "Rol no válido para registro directo") {
+      return res.status(403).json({ message: error.message, status: 403 });
+    }
+
     return res.status(500).json({ message: "Error interno del servidor" });
   }
 };
 
-/**
- * Login de usuario
- */
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Buscar al usuario por email en los diferentes modelos
-    const user =
-      await administratorModel.findOne({ email }) ||
-      await adminEventsDiscriminator.findOne({ email }) ||
-      await participantModel.findOne({ email }) ||
-      await supervisorModel.findOne({ email });
-
-    if (!user) {
-      return res.status(401).json({ message: "Credenciales inválidas", status: 404 });
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email y contraseña son requeridos" });
     }
 
-    // Comparar la contraseña
-    const isMatch = user.password === password || await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(401).json({ message: "Credenciales inválidas", status: 400 });
+    // 1. Llamar al servicio
+    const result = await authService.loginUser(email, password);
+
+    if (!result) {
+      // Usamos un mensaje genérico por seguridad
+      return res.status(401).json({ message: "Credenciales inválidas", status: 401 });
     }
 
-    // Crear payload para el token
-    const payload = {
-      userId: user._id,
-      role: user.role
-    };
+    // 2. Responder
+    return res.json({
+      token: result.token,
+      role: result.user.role,
+      user: result.user
+    });
 
-    // Firmar el token
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "2d" });
-
-    // Devolver la respuesta con el usuario completo
-    return res.json({ token, role: payload.role, user });
   } catch (error) {
-    console.error(error);
+    console.error("Error en login:", error);
     return res.status(500).json({ message: "Error interno del servidor" });
   }
 };
+// ... importaciones anteriores ...
 
+exports.googleLogin = async (req, res) => {
+  try {
+    const { token } = req.body; // El frontend enviará { token: "google_id_token..." }
+
+    if (!token) {
+      return res.status(400).json({ message: "No se proporcionó el token de Google" });
+    }
+
+    const result = await authService.googleLogin(token);
+
+    // Validación de seguridad para Checadores en Web
+    // Si el rol es supervisor, el frontend web debería bloquearlo, pero el backend devuelve el token igual.
+    // Opcionalmente puedes bloquearlo aquí si sabes que esta API solo la usa la Web.
+
+    return res.json({
+      token: result.token,
+      role: result.user.role,
+      user: result.user
+    });
+
+  } catch (error) {
+    console.error("Error en Google Login:", error);
+    return res.status(500).json({ message: "Error al autenticar con Google" });
+  }
+};
