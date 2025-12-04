@@ -21,6 +21,7 @@ const path = require("path");
 const { existsSync } = require("fs");
 
 const absPathForImages = path.join(__dirname, "../../uploads/images");
+
 const getImg = async (req, res) => {
   const { filename } = req.query;
   const filePath = path.join(absPathForImages, filename);
@@ -32,7 +33,16 @@ const getImg = async (req, res) => {
   }
 }
 
+// --- FUNCIÓN CORREGIDA ---
 const create = async (req, res) => {
+  
+  // 1. Asignar la imagen si existe
+  if (req.file) {
+    req.body.img = req.file.filename;
+  } else {
+    // Si el modelo requiere imagen obligatoriamente, devolvemos error si no se subió
+    return res.status(400).json({ data: "La imagen es obligatoria", status: 400 });
+  }
 
   const result = clientDataValidation(req);
   if (result.status === 400) return res.status(result.status).json(result);
@@ -56,6 +66,11 @@ const getAllWorkshops = async (req, res) => {
 }
 
 const updateById = async (req, res) => {
+
+  // Si se sube una nueva imagen al actualizar, la asignamos
+  if (req.file) {
+    req.body.img = req.file.filename;
+  }
 
   const result = clientDataValidation(req);
   if (result.status === 400) return res.status(result.status).json(result);

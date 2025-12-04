@@ -7,7 +7,9 @@ const { participantModel } = require("../models/user/participant/participant.mod
 const mongoose = require("mongoose");
 const { formattDate } = require("../validators/dates");
 
-// --- CORREGIDO: Sin Transacciones ---
+// ... (createWorkshop, getWorkshops, updateWorkshopById, deleteWorkshopById, getWorkshopsByAdmin, getWorkshopsByEvent, getWorkshopsBySupervisor, getWorkshopsByParticipant se mantienen igual) ...
+// Para ahorrar espacio, dejo las funciones que no cambiaron igual, aquí abajo está lo importante:
+
 const createWorkshop = async (workshop, adminId) => {
   // Busqueda del administrador
   const admin = await adminEventsDiscriminator.findById(adminId);
@@ -183,13 +185,18 @@ const addSupervisor = async (workshopId, supervisorId) => {
   }
 };
 
-// --- CORREGIDO: Sin Transacciones ---
+
+// =====================================================================
+// === AQUÍ ESTÁ LA FUNCIÓN MODIFICADA CON AUTO-INSCRIPCIÓN AL EVENTO ===
+// =====================================================================
 const addParticipant = async (workshopId, participantId) => {
   // Busqueda del taller
   const workshop = await recreationalWorkshopModel.findById(workshopId);
   if(!workshop) throw new DataBaseError("El taller no se ha encontrado", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
 
   // Busqueda del participante
+  // IMPORTANTE: No usar findById solamente si vamos a modificar y salvar el documento completo,
+  // aquí obtenemos el documento de mongoose completo.
   const participant = await participantModel.findById(participantId);
   if(!participant) throw new DataBaseError("El participante no se ha encontrado", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
 
@@ -224,34 +231,77 @@ const addParticipant = async (workshopId, participantId) => {
       }
     }
 
+    // Obtener el id del evento del taller
+    const eventId = workshop.event;
+    if(!eventId) throw new DataBaseError("Este taller no pertenece a un evento", DB_ERROR_CODES.BAD_REQUEST);
+
+    // --- LOGICA DE AUTO-INSCRIPCION AL EVENTO ---
+    // Verificamos si ya existe el QR del evento en el participante
+    let QREvent = participant.QRs.find(QR => QR.eventId.equals(eventId));
+
+    if (!QREvent) {
+        // Si no existe, significa que no está inscrito en el evento (o hubo un error de datos).
+        // Procedemos a inscribirlo automáticamente.
+        
+        const event = await eventModel.findById(eventId);
+        if(!event) throw new DataBaseError("El evento asociado al taller no existe", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
+
+        // 1. Inscribir al participante en el Modelo de Evento
+        await event.updateOne({ 
+            $addToSet: { participants: { userId: participant._id, assist: false } } 
+        });
+
+        // 2. Agregar el evento al array de eventos del participante (en memoria)
+        participant.events.addToSet(eventId);
+
+        // 3. Generar el Folio del Evento (ID usuario + ID evento)
+        const eventFolio = participant._id.toString().slice(-5) + eventId.toString().slice(-5);
+
+        // 4. Crear el objeto QR para el evento
+        const newQR = {
+            eventId: eventId,
+            folio: eventFolio,
+            workshops: []
+        };
+
+        // 5. Agregarlo al array de QRs del participante
+        participant.QRs.push(newQR);
+
+        // 6. Guardamos los cambios iniciales del participante (Inscripción al evento)
+        await participant.save();
+
+        // 7. Actualizamos la referencia QREvent para que el resto de la función la encuentre
+        QREvent = participant.QRs.find(QR => QR.eventId.equals(eventId));
+    }
+    // -------------------------------------------------
+
     // Agregar el id del participante al arreglo de `participants` del taller
     const workshopResult = await workshop.updateOne({ $addToSet: { participants: { userId: participant._id, assist: false } } }, { new: true });
     if(workshopResult.modifiedCount === 0) throw new DataBaseError("Ya hay un registro de este participante en este taller", DB_ERROR_CODES.DUPLICATED_CONTENT);
 
     // Agregar el id del taller al arreglo de `workshops` del participante
-    const participantResult = await participant.updateOne({ $addToSet: { workshops: workshop._id } }, { new: true });
-    if(participantResult.modifiedCount === 0) throw new DataBaseError("Ya hay un registro de este participante en este taller", DB_ERROR_CODES.DUPLICATED_CONTENT);
+    // Nota: Usamos updateOne aquí para asegurar consistencia atómica en este campo, 
+    // aunque participant.save() al final también lo haría, mantenemos tu lógica original.
+    await participant.updateOne({ $addToSet: { workshops: workshop._id } });
 
-    // Agregar el folio del taller al arreglo de talleres de `QRs` del participante
     // Generar el folio del taller
     const folio = participant._id.toString().slice(-5) + workshop._id.toString().slice(-5);
 
-    // Obtener el id del evento
-    const eventId = workshop.event;
-    if(!eventId) throw new DataBaseError("Este taller no pertenece a un evento", DB_ERROR_CODES.BAD_REQUEST);
-
-    // Buscar el QR del evento
-    const QREvent = participant.QRs.find(QR => QR.eventId.equals(eventId));
-    if(!QREvent) throw new DataBaseError("Este participante no tiene un QR para este evento", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
-
     // Agregar el folio del taller al arreglo de talleres de `QRs` del participante
-    const QRWorkshopResult = QREvent.workshops.addToSet({ folio, workshopId: workshop._id });
-    if(QRWorkshopResult.modifiedCount === 0) throw new DataBaseError("Ya hay un registro de este participante en este taller", DB_ERROR_CODES.DUPLICATED_CONTENT);
-    //QREvent.workshops.push({ folio, workshopId: workshop._id });
+    // Como QREvent es una referencia al objeto dentro de participant.QRs (gracias a mongoose),
+    // si hacemos push aquí y luego save(), se guarda.
+    
+    // Verificamos duplicados en memoria antes de empujar
+    const existsWorkshopInQR = QREvent.workshops.some(w => w.workshopId.equals(workshop._id));
+    if (!existsWorkshopInQR) {
+        QREvent.workshops.push({ folio, workshopId: workshop._id });
+    } else {
+        // Si ya existe, lanzamos error para mantener consistencia con tu lógica
+        throw new DataBaseError("Ya hay un registro de este participante en este taller", DB_ERROR_CODES.DUPLICATED_CONTENT);
+    }
 
-    // Actualizar el participante
+    // Actualizar el participante completo (esto guardará el nuevo workshop en el QR)
     participant.markModified("QRs");
-    participant.markModified("QRS.workshops");
     await participant.save();
 
     return workshop;
@@ -261,6 +311,8 @@ const addParticipant = async (workshopId, participantId) => {
     throw err;
   }
 }
+
+// ... importaciones
 
 const assistanceRegistration = async (folio) => {
 
@@ -280,6 +332,16 @@ const assistanceRegistration = async (folio) => {
   const participantToUpdate = workshopFound.participants.find(participantInWorkshop => participantInWorkshop.userId.equals(participant._id));
 
   if(participantToUpdate) {
+    
+    // --- NUEVA VALIDACIÓN: YA ESCANEADO ---
+    if (participantToUpdate.assist === true) {
+        throw new DataBaseError(
+            "Este código QR ya fue utilizado para entrar al taller.", 
+            DB_ERROR_CODES.DUPLICATED_CONTENT
+        );
+    }
+    // --------------------------------------
+
     participantToUpdate.assist = true;
     workshopFound.markModified('participants');
     await workshopFound.save();
@@ -288,6 +350,7 @@ const assistanceRegistration = async (folio) => {
 
   throw new DataBaseError("No se ha encontrado este participante en el taller", DB_ERROR_CODES.RESOURCE_NOT_FOUND);
 }
+
 
 // --- CORREGIDO: Sin Transacciones ---
 const cancelWorkshopRegistration = async (participantId, workshopId) => {
@@ -345,14 +408,27 @@ const cancelWorkshopRegistration = async (participantId, workshopId) => {
 
 const getWorkshopsBySupervisorAndEvent = async (supervisorId, eventId) => {
   try {
+    // 1. Buscamos en el modelo del SUPERVISOR si tiene asignado el evento en su array 'events'.
+    const supervisor = await supervisorModel.findOne({
+      _id: supervisorId,
+      events: eventId 
+    });
+
+    if (!supervisor) {
+      throw new DataBaseError(
+        "El supervisor no tiene asignado este evento o no existe",
+        DB_ERROR_CODES.RESOURCE_NOT_FOUND
+      );
+    }
+
+    // 2. Si el supervisor tiene permiso, traemos TODOS los talleres de ese evento.
     const workshops = await recreationalWorkshopModel.find({
-      event: eventId,
-      supervisors: supervisorId
+      event: eventId
     }).populate('event', 'name date').lean();
 
     if (!workshops || workshops.length === 0) {
       throw new DataBaseError(
-        "No se encontraron talleres para el supervisor en el evento especificado",
+        "No se encontraron talleres en este evento",
         DB_ERROR_CODES.RESOURCE_NOT_FOUND
       );
     }
